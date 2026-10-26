@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aqi"
+version = "0.1.0"
+description = "Delhi PM2.5 forecasting with calibrated prediction intervals"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "pandas",
+    "numpy",
+    "requests",
+    "pyarrow",
+    "python-dotenv",
+    "matplotlib",
+    "jupyter",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]

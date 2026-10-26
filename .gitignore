@@ -1,0 +1,27 @@
+# secrets
+.env
+
+# data (never committed; scripts + data/README.md document how to fetch it)
+data/raw/*
+data/interim/*
+!data/raw/.gitkeep
+!data/interim/.gitkeep
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+
+# notebooks / tooling
+.ipynb_checkpoints/
+.pytest_cache/
+.ruff_cache/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
