@@ -25,3 +25,7 @@ dist/
 .DS_Store
 .vscode/
 .idea/
+
+# other
+aqi_env/
+.cache*
