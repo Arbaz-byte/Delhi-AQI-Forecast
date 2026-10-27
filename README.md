@@ -26,7 +26,7 @@ Modelling, uncertainty and the dashboard come after this phase is solid.
 ## Setup
 
 ```bash
-git clone https://github.com/<your-username>/delhi-aqi-forecast.git
+git clone https://github.com/<Arbaz-byte>/delhi-aqi-forecast.git
 cd delhi-aqi-forecast
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
