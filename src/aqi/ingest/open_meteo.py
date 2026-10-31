@@ -84,12 +84,7 @@ def fetch_hourly(lat: float, lon: float, start: str, end: str, variables: Sequen
     return df
 
 
-def validate_hourly(
-    df: pd.DataFrame,
-    start: str,
-    end: str,
-    variables: Sequence[str],
-) -> None:
+def validate_hourly(df: pd.DataFrame, start: str, end: str, variables: Sequence[str], ) -> None:
     """Raise ValueError if hourly fields or timestamps are incomplete or invalid."""
 
     missing_columns = [column for column in ["time", *variables] if column not in df]
@@ -140,7 +135,7 @@ def write_raw(df: pd.DataFrame, name: str = "open_meteo") -> Path:
 
 
 def main() -> None:
-    start, end = "2017-10-27", "2025-11-11"
+    start, end = "2003-01-01", "2026-10-11"
     df = fetch_hourly(28.695, 77.181, start, end)
     validate_hourly(df, start, end, DEFAULT_VARIABLES)
     print(f"Wrote {len(df)} rows to {write_raw(df)}")
