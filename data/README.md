@@ -12,8 +12,9 @@ audited.
 
 ## Weather: Open-Meteo Archive
 
-Raw file: `raw/open_meteo.parquet`. Fetch metadata is stored alongside it in
-`raw/open_meteo.meta.json`. Fetch code: `src/aqi/ingest/open_meteo.py`.
+Raw file: `raw/open_meteo/open_meteo.parquet`. Fetch metadata is stored
+alongside it in `raw/open_meteo/open_meteo.meta.json`. Fetch code:
+`src/aqi/ingest/open_meteo.py`.
 Full audit with figures: `notebooks/01_weather_audit.ipynb`.
 
 Attribution: weather data by Open-Meteo.com (confirm the exact wording required
