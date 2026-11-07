@@ -1,4 +1,4 @@
-"""Open-Meteo archive ingest: raw hourly weather -> data/raw/."""
+"""Open-Meteo archive ingest: raw hourly weather -> data/raw/open_meteo/."""
 
 import json
 from collections.abc import Sequence
@@ -13,8 +13,8 @@ from urllib3.util.retry import Retry
 # Open meteo archive API URL
 ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
 
-# Path to the directory where raw dat
-RAW_DIR = Path(__file__).resolve().parents[3] / "data" / "raw"
+# Path to the directory where raw Open-Meteo data is stored.
+RAW_DIR = Path(__file__).resolve().parents[3] / "data" / "raw" / "OpenMeteo"
 
 # Variables to ingest by default
 DEFAULT_VARIABLES = [
