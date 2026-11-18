@@ -1,10 +1,9 @@
-"""
-Reusable data-audit helpers for hourly time-series sources.
+"""Utilities for validating and diagnosing environmental time series.
 
-Used first for the Open-Meteo weather audit (notebooks/01_weather_audit.ipynb)
-and meant to be reused for station PM2.5 and fire data.
-
-
+The helpers cover hourly data loading and structure checks, missing values and
+range violations, constant runs, calendar features, wind analysis, and simple
+time-series diagnostics such as anomalies and level shifts. They are intended
+for reuse across weather, air-quality, and related environmental datasets.
 """
 
 from __future__ import annotations
@@ -19,6 +18,9 @@ import pandas as pd
 # --------------------------------------------------------------------------
 
 # Local Delhi seasons (differ from the IMD calendar on purpose; see notebook).
+
+# Pre-Monsoon - Summer
+# Post-Monsoon - Winter
 SEASON_BY_MONTH = {
     12: "Winter", 1: "Winter", 2: "Winter",
     3: "Pre-monsoon", 4: "Pre-monsoon", 5: "Pre-monsoon", 6: "Pre-monsoon",
@@ -40,13 +42,28 @@ WIND_SPEED_LABELS = ["0–<5", "5–<10", "10–<20", "20–<30", "30+"]
 # --------------------------------------------------------------------------
 
 
-# Load hourly data from a given path
 def load_hourly(path: str | Path) -> pd.DataFrame:
+    """Read an hourly Parquet file and use its ``time`` column as the index.
     
-    """
-    Read a raw parquet file and index it by its `time` column.
-    The index is deliberately not sorted here: sorting first could hide an
-    ordering problem that `check_structure` should catch.
+    Parameters
+    ----------
+    path : str or pathlib.Path
+        Path to a Parquet file containing a ``time`` column.
+    Returns
+    -------
+    pandas.DataFrame
+        The file contents with ``time`` converted to a ``DatetimeIndex`` named
+        ``time``. All other columns are preserved.
+        
+    Raises
+    ------
+    ValueError
+        If the file contains no rows or has no ``time`` column.
+        
+    Notes
+    -----
+    The input order is preserved. The function does not sort timestamps, so
+    ``check_structure`` can detect ordering problems.
     """
     df = pd.read_parquet(path)
     
@@ -59,13 +76,37 @@ def load_hourly(path: str | Path) -> pd.DataFrame:
     return df
 
 
-# Structure Audit function to ensure the data is in a clean, complete hourly series
 def check_structure(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Raise ValueError if the index is not a clean, complete hourly series.\
-    Returns a one-row summary table when everything passes.
-    """
+    Validate that a frame has a unique, increasing, complete hourly index.
     
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Frame whose index is expected to be a ``DatetimeIndex`` with one-hour
+        spacing.
+        
+    Returns
+    -------
+    pandas.DataFrame
+        One-column summary indexed by ``rows``, ``first``, ``last``,
+        ``years_covered``, ``timezone``, ``duplicates``, and ``gaps``.
+        
+    Raises
+    ------
+    TypeError
+        If the index is not a ``DatetimeIndex``.
+    ValueError
+        If timestamps are duplicated, out of order, or not exactly one hour
+        apart.
+    IndexError
+        If the index is empty.
+        
+    Notes
+    -----
+    Naive timestamps are reported as local IST; timezone-aware indexes report
+    their timezone. The input frame is not modified.
+    """
     idx = df.index
     
     if not isinstance(idx, pd.DatetimeIndex):
@@ -74,12 +115,12 @@ def check_structure(df: pd.DataFrame) -> pd.DataFrame:
         raise ValueError(f"{idx.duplicated().sum()} duplicate timestamps")
     if not idx.is_monotonic_increasing:
         raise ValueError("Index is not monotonic increasing")
-    
+
     steps = idx.to_series().diff().iloc[1:]
     bad = steps[steps != pd.Timedelta(hours=1)]
     if not bad.empty:
         raise ValueError(f"{len(bad)} gaps; first: {bad.head(3).to_dict()}")
-
+    
     expected = int((idx[-1] - idx[0]) / pd.Timedelta(hours=1)) + 1
     if expected != len(idx):
         raise ValueError(f"Expected {expected} rows, found {len(idx)}")
@@ -97,14 +138,21 @@ def check_structure(df: pd.DataFrame) -> pd.DataFrame:
     ).T.rename(columns={0: "value"})
 
 
-# Check For Missing Values 
 def missing_summary(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Per-column count of NaNs and common sentinel values.
+    """Count missing values and common sentinels in numeric columns.
     
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Frame containing data columns to inspect. Non-numeric columns are
+        ignored.
+        
+    Returns
+    -------
+    pandas.DataFrame
+        A row per numeric column with ``nan`` and ``sentinel`` counts. The
+        recognized sentinels are ``-9999``, ``-999``, and ``9999``.
     """
-    
-    # Outliers Values 
     sentinels = [-9999, -999, 9999]
     numeric = df.select_dtypes("number")
     return pd.DataFrame(
@@ -120,8 +168,28 @@ def missing_summary(df: pd.DataFrame) -> pd.DataFrame:
 # --------------------------------------------------------------------------
 
 def range_violations( df: pd.DataFrame, ranges: Mapping[str, tuple[float | None, float | None]],) -> pd.DataFrame:
+    """Count numeric values strictly outside configured review ranges.
     
-    """ Count values outside broad review ranges (None = unbounded). """
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Data containing the variables to check.
+    ranges : mapping of str to (float or None, float or None)
+        Column names mapped to inclusive lower and upper review bounds. Use
+        ``None`` for an unbounded side.
+        
+    Returns
+    -------
+    pandas.DataFrame
+        One row per requested variable, indexed by variable name, with the
+        configured range, counts below and above it, and observed minimum and
+        maximum. Missing values are not counted as violations.
+        
+    Raises
+    ------
+    KeyError
+        If a requested variable is not a column in ``df``.
+    """
     rows = []
     for column, (lower, upper) in ranges.items():
         values = df[column]
@@ -141,9 +209,27 @@ def range_violations( df: pd.DataFrame, ranges: Mapping[str, tuple[float | None,
 
 
 def constant_runs(series: pd.Series, min_hours: int = 24) -> pd.DataFrame:
-    """
-    Runs of >= `min_hours` identical consecutive values.
-    A missing value breaks a run; it is never counted as a repeat.
+    """Find consecutive runs of identical non-missing values.
+
+    Parameters
+    ----------
+    series : pandas.Series
+        Values to inspect, usually an hourly time series.
+    min_hours : int, default=24
+        Minimum number of consecutive rows required for a run to be returned.
+        Despite the parameter name, duration is counted in rows; timestamps
+        are not checked for hourly spacing.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Matching runs with ``value``, ``start``, ``end``, and ``hours``
+        columns, sorted from longest to shortest. An empty frame is returned
+        when no run meets the threshold.
+
+    Notes
+    -----
+    Missing values break runs and are never treated as repeated values.
     """
     values = series
     same = values.eq(values.shift()) & values.notna() & values.shift().notna()
@@ -172,10 +258,25 @@ def constant_runs(series: pd.Series, min_hours: int = 24) -> pd.DataFrame:
 # --------------------------------------------------------------------------
 
 def add_calendar(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Return a copy with month, hour, season and season_year columns.
-    `season_year` assigns December to the *following* year so that one winter
-    (Dec, Jan, Feb) is a single group instead of being split across years.
+    """Add local calendar and Delhi-season features to a time-indexed frame.
+    
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Frame with a datetime-like index.
+
+    Returns
+    -------
+    pandas.DataFrame
+        A copy of ``df`` with ``month``, ``hour``, ``season``, and
+        ``season_year`` columns. ``season`` is an ordered categorical using
+        ``SEASON_ORDER``.
+
+    Notes
+    -----
+    December is assigned to the following ``season_year`` so December,
+    January, and February belong to the same winter. Existing columns with
+    these feature names are replaced in the returned copy; ``df`` is unchanged.
     """
     out = df.copy()
     out["month"] = out.index.month
@@ -188,6 +289,18 @@ def add_calendar(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def expected_hours_in_year(year: int) -> int:
+    """Return the number of hourly observations in a calendar year.
+
+    Parameters
+    ----------
+    year : int
+        Gregorian calendar year.
+
+    Returns
+    -------
+    int
+        ``8760`` for a common year or ``8784`` for a leap year.
+    """
     return (366 if pd.Timestamp(year=year, month=1, day=1).is_leap_year else 365) * 24
 
 
@@ -196,25 +309,31 @@ def expected_hours_in_year(year: int) -> int:
 # --------------------------------------------------------------------------
 
 def wind_components(speed: pd.Series, direction: pd.Series) -> pd.DataFrame:
+    """Convert meteorological wind speed and direction to east/north components.
+
+    Parameters
+    ----------
+    speed : pandas.Series
+        Wind speed values. Units are preserved in the resulting components.
+    direction : pandas.Series
+        Meteorological direction in degrees, measured clockwise from north and
+        indicating where the wind comes from. It should align with ``speed``.
+
+    Returns
+    -------
+    pandas.DataFrame
+        ``u`` (eastward) and ``v`` (northward) components, indexed like
+        ``speed``. The calculation is ``u = -speed * sin(direction)`` and
+        ``v = -speed * cos(direction)`` after converting degrees to radians.
+
+    Notes
+    -----
+    Calm values (speed equal to zero) yield zero components regardless of
+    direction. Missing or misaligned values follow pandas' normal alignment
+    and missing-value behavior.
     """
-    Meteorological wind to u/v components (u east, v north).
-    Direction is where the wind comes FROM, hence the minus signs. Calm hours
-    (speed == 0) get u = v = 0 whatever the stored direction is.
-    """
-    
-    """  
-    [ u = -S\sin(\theta), \qquad v = -S\cos(\theta) ] 
-    
-    where, 
-    1. (S) is wind speed.
-    2. (\theta) is wind direction in radians. The input direction is in degrees, so np.deg2rad(direction) converts it before applying sine and cosine.
-    3. u is the east–west component: positive means eastward, negative means westward.
-    4. v is the north–south component: positive means northward, negative means southward
-        
-    """
-    
     rad = np.deg2rad(direction)
-    
+
     return pd.DataFrame(
         {"u": -speed * np.sin(rad), "v": -speed * np.cos(rad)},
         index=speed.index,
@@ -222,10 +341,28 @@ def wind_components(speed: pd.Series, direction: pd.Series) -> pd.DataFrame:
 
 
 def wind_rose_table( speed: pd.Series, direction: pd.Series, normalise: bool = True ) -> pd.DataFrame:
-    """
-    16-sector x speed-bin table for a wind rose. Calm hours are excluded.
+    """Tabulate wind observations by compass sector and speed bin.
 
-    Direction is wrapped with `% 360`, so 360 (north in this dataset) is kept.
+    Parameters
+    ----------
+    speed : pandas.Series
+        Wind speeds in km/h, matching the bins in ``WIND_SPEED_BINS``.
+    direction : pandas.Series
+        Meteorological direction in degrees. Values are wrapped modulo 360.
+    normalise : bool, default=True
+        If true, return percentages of retained observations; otherwise return
+        integer counts.
+
+    Returns
+    -------
+    pandas.DataFrame
+        A 16-row compass-sector by 5-column speed-bin table. Missing pairs,
+        zero-speed calm observations, and non-positive speeds are excluded.
+
+    Notes
+    -----
+    The speed bins are left-closed: ``[0, 5)``, ``[5, 10)``, ``[10, 20)``,
+    ``[20, 30)``, and ``[30, infinity)``. Direction 360 degrees wraps to north.
     """
     wind = pd.DataFrame({"s": speed, "d": direction}).dropna()
     wind = wind[wind["s"] > 0]
@@ -247,16 +384,40 @@ def wind_rose_table( speed: pd.Series, direction: pd.Series, normalise: bool = T
 # --------------------------------------------------------------------------
 
 def deseasonalise(series: pd.Series) -> pd.Series:
-    
-    """Remove the mean annual+diurnal cycle (mean by month x hour)."""
-    
+    """Subtract the mean for each calendar-month and hour-of-day group.
+
+    Parameters
+    ----------
+    series : pandas.Series
+        Time-indexed values with a datetime-like index.
+
+    Returns
+    -------
+    pandas.Series
+        Residuals after subtracting each observation's month-by-hour mean.
+        The original index and name are preserved.
+    """
     key = [series.index.month, series.index.hour]
     return series - series.groupby(key).transform("mean")
 
 
 def autocorrelation(series: pd.Series, lags: Sequence[int]) -> pd.Series:
-    """Pearson autocorrelation at the given hourly lags."""
-    
+    """Calculate Pearson autocorrelation for requested observation lags.
+
+    Parameters
+    ----------
+    series : pandas.Series
+        Ordered time-series values. For hourly data, lags are measured in
+        hours; otherwise they count rows.
+    lags : sequence of int
+        Integer lag values to evaluate.
+
+    Returns
+    -------
+    pandas.Series
+        Autocorrelation values indexed by the requested lags. Values may be
+        ``NaN`` when a lag cannot be calculated, such as for constant data.
+    """
     return pd.Series({lag: series.autocorr(lag=lag) for lag in lags})
 
 
@@ -265,26 +426,69 @@ def autocorrelation(series: pd.Series, lags: Sequence[int]) -> pd.Series:
 # --------------------------------------------------------------------------
 
 def daily_anomaly(series: pd.Series, baseline_end: str) -> pd.Series:
+    """Compute daily-mean anomalies against a baseline day-of-year climatology.
+
+    Parameters
+    ----------
+    series : pandas.Series
+        Time-indexed observations to resample to daily means.
+    baseline_end : str
+        Inclusive end date for fitting the climatology. Later observations do
+        not contribute to the baseline.
+
+    Returns
+    -------
+    pandas.Series
+        Daily means minus the corresponding smoothed baseline climatology,
+        indexed by day. Days whose day-of-year is absent from the baseline
+        produce ``NaN`` anomalies.
+
+    Notes
+    -----
+    The climatology groups baseline daily means by day of year and smooths
+    those means with a centered 15-day rolling window.
     """
-    Daily mean minus a smoothed day-of-year climatology.
-    The climatology is fitted on data up to `baseline_end` only, so later
-    shifts show up as anomalies instead of being absorbed into the baseline.
-    """
-    
     daily = series.resample("D").mean()
     base = daily.loc[:baseline_end]
     clim = (
-        base.groupby(base.index.dayofyear).mean()
+        base.groupby(base.index.day_of_year).mean()
         .rolling(15, center=True, min_periods=1).mean()
     )
-    return daily - clim.reindex(daily.index.dayofyear).to_numpy()
+    return daily - clim.reindex(daily.index.day_of_year).to_numpy()
 
 
-def find_level_shift( series: pd.Series, start: str, end: str, min_segment: int = 20 ) -> tuple[pd.Timestamp, float, float]:
+def find_level_shift(
+    series: pd.Series,
+    start: str,
+    end: str,
+    min_segment: int = 20,
+) -> tuple[pd.Timestamp, float, float]:
     """
-    Single least-squares change point of the mean inside [start, end].
-    Returns (change_date, mean_before, mean_after). A descriptive tool, not a
-    significance test: it always returns *some* split.
+    Find the single least-squares change point in the mean within a time window.
+
+    Parameters
+    ----------
+    series : pandas.Series
+        Time-indexed observations. Missing values in the selected window are
+        dropped before fitting.
+    start : str
+        Inclusive start of the search window.
+    end : str
+        Inclusive end of the search window.
+    min_segment : int, default=20
+        Minimum segment size used to constrain candidate split positions.
+
+    Returns
+    -------
+    tuple of (pandas.Timestamp, float, float)
+        Timestamp of the first observation after the split, mean before the
+        split, and mean after the split.
+
+    Notes
+    -----
+    This is a descriptive single-change-point fit, not a significance test.
+    It selects the candidate split with minimum combined within-segment
+    squared error.
     """
     window = series.loc[start:end].dropna()
     values = window.to_numpy()
@@ -304,9 +508,24 @@ def find_level_shift( series: pd.Series, start: str, end: str, min_segment: int 
 # --------------------------------------------------------------------------
 
 def plot_wind_rose(ax, table: pd.DataFrame, title: str = "") -> None:
-    """
-    Stacked polar bars from `wind_rose_table` (values are % of hours).
-    `ax` must be a polar axis: `fig.add_subplot(..., projection="polar")`.
+    """Draw a stacked wind-rose chart on a polar Matplotlib axis.
+
+    Parameters
+    ----------
+    ax : matplotlib.axes.Axes
+        Polar axes, typically created with
+        ``fig.add_subplot(..., projection="polar")``.
+    table : pandas.DataFrame
+        Sector-by-speed-bin values, typically produced by
+        :func:`wind_rose_table`. The index should use ``COMPASS_16`` and the
+        columns should be speed-bin labels.
+    title : str, default=""
+        Title to display above the chart.
+
+    Returns
+    -------
+    None
+        Adds bars and labels to ``ax`` in place.
     """
     import matplotlib.pyplot as plt
     
