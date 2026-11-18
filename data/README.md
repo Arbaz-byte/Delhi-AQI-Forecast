@@ -10,6 +10,11 @@ audited.
 | Weather (Open-Meteo Archive API) | Hourly temperature, humidity, wind, rain, and pressure | Open-Meteo Archive API | YES | Ingested and audited (see below) |
 | NASA FIRMS | Active-fire detections (Punjab/Haryana box) | Free MAP_KEY | no | not started |
 
+The optional latest-snapshot client for data.gov.in is
+`src/aqi/ingest/aqi_govt.py` (run with `python -m aqi.ingest.aqi_govt`; requires
+`DATA_GOV_API_KEY` in `.env`). It is separate from the historical OpenAQ and
+OpenCity readers and is currently parked after a `ReadTimeout`.
+
 ## Weather: Open-Meteo Archive
 
 Raw file: `raw/open_meteo/open_meteo.parquet`. Fetch metadata is stored
