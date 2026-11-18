@@ -6,7 +6,7 @@ audited.
 
 | Source | What | Access | Terms checked | Status |
 |---|---|---|---|---|
-| CPCB station readings (via OpenCity / data.gov.in / OpenAQ) | Hourly pollutants per station | TBD | no | not started |
+| CPCB station readings (via OpenCity / data.gov.in / OpenAQ) | Ashok Vihar PM2.5 and related pollutants | OpenCity CSV + OpenAQ API export | no | 2024–25 OpenCity and Feb 2025–Nov 2026 OpenAQ ingested; 2025 overlap is available, but the source seam and clock convention remain unvalidated; legacy AQI-like file excluded from the PM2.5 target |
 | Weather (Open-Meteo Archive API) | Hourly temperature, humidity, wind, rain, and pressure | Open-Meteo Archive API | YES | Ingested and audited (see below) |
 | NASA FIRMS | Active-fire detections (Punjab/Haryana box) | Free MAP_KEY | no | not started |
 
@@ -94,6 +94,111 @@ on their terms page before publishing).
 
 Treat audit findings as checks on this source and coverage, not as station-level
 ground truth.
+
+## OpenCity: Ashok Vihar (first-pass audit)
+
+Raw files:
+
+- `raw/OpenCity/del-ashok-vihar-2017_2023.csv`
+- `raw/OpenCity/del-ashok-vihar-dpcc-2024-25 .csv`
+
+Audit notebook: `notebooks/02_opencity_audit.ipynb`. The legacy matrix reader is
+`src/aqi/opencity.py`.
+
+### Coverage and identity
+
+| File | Parsed observations | First / last timestamp on stored clock | Finding |
+|---|---:|---|---|
+| 2017–2023 matrix | 46,809 hourly values | 2018-02-01 09:00 / 2023-12-31 23:00 | The file has a 2017 header but no numeric 2017 observations. There are 5,022 missing hourly slots inside the observed span. |
+| 2024–2025 station export | 70,176 valid 15-minute rows | 2024-01-01 00:00 / 2025-12-31 23:45 | `site_1420`, Ashok Vihar, Delhi - DPCC; complete quarter-hour timestamp grid. One extra footer-like row has no timestamp. |
+
+The older filename says Ashok Vihar, but its observation matrix contains no
+station ID or name. Therefore station continuity with the newer `site_1420`
+file is plausible, not verified from both files' contents.
+
+### Measurement and time decisions
+
+- The older values range from **1 to 500**, including 1,148 values exactly at
+  500. They look AQI-like, but the file has no variable/unit label; do **not**
+  treat them as PM2.5 concentrations without source metadata.
+- The newer file labels PM2.5 as **µg/m³**; its values range from 1 to 965 and
+  1,582 of the valid-timestamp PM2.5 records are null. No common sentinel
+  values were found in numeric measurements. Xylene, O Xylene, Eth-Benzene,
+  MP-Xylene, and VWS are entirely null.
+- New-file timestamps carry a `+0000` suffix, but the mean solar-radiation
+  profile peaks at 12:00 on the stored clock and at 18:00 after literal
+  UTC-to-IST conversion. Treat this as an unresolved timezone-label/clock
+  conflict; do not shift timestamps until the export convention is confirmed.
+- PM2.5 changes on the stored clock mostly at :00 (12,764 transitions) and
+  also at :45 (3,011), with some at :15 and :30. There is no single established
+  update minute or availability-time rule.
+- Do not concatenate the older AQI-like series with the newer PM2.5
+  concentration series. Confirm the old measure, station continuity, and time
+  convention first. The OpenAQ audit follows below; the source seam remains
+  unvalidated.
+
+## OpenAQ: Ashok Vihar (2025–2026)
+
+Raw files:
+
+- `raw/OpenAq/ashok_vihar_hourly_2025.parquet` — hourly observations requested for 2025-02-01 through 2025-12-31.
+- `raw/OpenAq/ashok_vihar_hourly_2025.meta.json` — request, location, sensor, and unit metadata.
+- `raw/OpenAq/ashok_vihar_hourly_2026.parquet` — hourly observations requested for 2026-01-01 through 2026-11-16.
+- `raw/OpenAq/ashok_vihar_hourly_2026.meta.json` — request, location, sensor, and unit metadata.
+
+Both pulls were made on **2026-11-16** within 5 km of Ashok Vihar, using local
+dates in `Asia/Kolkata`. `LOCATION_IDS=(8917,)` filtered the observation files
+to **location 8917**, Ashok Vihar, Delhi - DPCC (CPCB). The sidecars retain
+metadata for nearby locations and sensors; do not interpret that inventory as
+additional observations in the Parquet files.
+
+### Coverage and variables
+
+| File | Total rows | PM2.5 rows | PM2.5 first / last (IST) | Expected hours within observed span | Missing | Coverage | Longest missing run |
+|---|---:|---:|---|---:|---:|---:|---:|
+| 2025 | 42,622 | 7,149 | 2025-02-19 01:00 / 2025-12-31 23:00 | 7,583 | 434 | 94.28% | 61 h |
+| 2026 | 40,594 | 6,682 | 2026-01-01 00:00 / 2026-11-16 10:00 | 7,667 | 985 | 87.15% | 242 h |
+
+Coverage is calculated only between each file's first and last PM2.5 timestamp;
+it excludes dates outside that observed span. The 2025 request starts on
+Feb 1, but the first PM2.5 observation is Feb 19. These are sparse hourly
+series, not complete date ranges; missing hours are absent rows rather than
+null-valued rows. The longest gaps above are counts of consecutive missing
+hourly timestamps.
+
+| Parameter | Unit | 2025 rows | 2026 rows |
+|---|---|---:|---:|
+| CO | ppb | 7,021 | 6,733 |
+| NO₂ | ppb | 7,146 | 6,820 |
+| O₃ | µg/m³ | 6,975 | 6,796 |
+| PM10 | µg/m³ | 7,170 | 6,766 |
+| PM2.5 | µg/m³ | 7,149 | 6,682 |
+| SO₂ | ppb | 7,161 | 6,797 |
+
+NH₃ and lead were not returned. Both files contain only location 8917 and six
+parameters. Across the two files, values are non-null, non-negative, and have
+no duplicate `(location_id, sensor_id, parameter, timestamp_utc)` keys.
+Every `period_end_utc` is one hour after `timestamp_utc`; timestamps represent
+hourly period starts. Gas units are reported in ppb, while PM2.5, PM10, and O₃
+are in µg/m³.
+
+### Decisions and limits
+
+- **Target eligibility:** Use the labelled PM2.5 concentration records as
+  candidate target data. Continue to exclude the unlabelled 2017–2023
+  AQI-like OpenCity matrix from PM2.5 modelling.
+- **Coverage:** Preserve missing timestamps as missing; do not interpolate
+  across long outages, especially the 242-hour gap in the 2026 PM2.5 series.
+  Define coverage and maximum-gap rules before training.
+- **Units:** This is raw concentration data, not a calculated CPCB AQI. OpenAQ
+  gas values in ppb cannot be compared directly with OpenCity gas columns in
+  µg/m³; any conversion must be explicit.
+- **Seam:** The 2025 OpenAQ file now overlaps the 2024–2025 OpenCity record,
+  replacing the earlier January-only pull. This makes an overlap check
+  possible, but no like-for-like hourly seam result is documented yet.
+  OpenCity's `+0000` timestamp label still conflicts with its solar-radiation
+  profile. Keep the seam unvalidated until timestamps are aligned using
+  confirmed clock semantics and the overlap is audited.
 
 ## Other source conventions
 
